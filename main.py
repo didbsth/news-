@@ -24,12 +24,12 @@ CATEGORIES = {
 
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# Google Search Retrieval 도구 활성화
+
+# 기존 1.5 대신 2026년 최신 모델인 3 시리즈를 사용하도록 수정
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-3-flash-preview', # 혹은 'gemini-flash-latest'
     tools=[{"google_search_retrieval": {}}]
 )
-
 def setup_driver():
     options = Options()
     options.add_argument("--headless")
