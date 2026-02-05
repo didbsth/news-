@@ -10,7 +10,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# 수집할 카테고리 정보 설정
+# 1. 수집할 카테고리 설정
 CATEGORIES = {
     "모바일": "https://news.naver.com/breakingnews/section/105/731",
     "인터넷 & SNS": "https://news.naver.com/breakingnews/section/105/226",
@@ -29,38 +29,43 @@ def setup_driver():
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
 def clean_text(text):
-    """제목에서 한글과 공백만 남기고 제거 (유사도 측정 정확도 향상)"""
+    """유사도 측정을 위해 한글/공백만 남김"""
     return re.sub(r'[^가-힣\s]', '', text)
 
-def deduplicate_articles(data_list, threshold=0.4):
-    """TF-IDF와 코사인 유사도를 이용한 중복 기사 제거"""
+def filter_ai_keywords(data_list):
+    """제목에 'AI', 'ai', '인공지능'이 포함된 기사만 1차 추출"""
+    filtered_data = []
+    pattern = re.compile(r'ai|인공지능', re.IGNORECASE)
+    
+    for item in data_list:
+        title = item[1]
+        if pattern.search(title):
+            filtered_data.append(item)
+    return filtered_data
+
+def deduplicate_articles(data_list, threshold=0.2):
+    """추출된 AI 기사들 중 유사한 제목 제거 (기준 0.2)"""
     if not data_list:
         return []
 
     df = pd.DataFrame(data_list, columns=['분류', '제목', '시간', '링크'])
     final_indices = []
 
-    # 각 카테고리별로 독립적으로 중복 체크 수행
     for category in df['분류'].unique():
         category_df = df[df['분류'] == category].copy()
         if len(category_df) <= 1:
             final_indices.extend(category_df.index.tolist())
             continue
 
-        # 1. 텍스트 정제 및 벡터화
         titles = category_df['제목'].apply(clean_text).tolist()
         vectorizer = TfidfVectorizer(min_df=1)
         tfidf_matrix = vectorizer.fit_transform(titles)
-        
-        # 2. 코사인 유사도 계산
         cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
         
-        # 3. 유사도 기반 필터링
         keep_mask = [True] * len(category_df)
         for i in range(len(category_df)):
             if not keep_mask[i]: continue
             for j in range(i + 1, len(category_df)):
-                # 설정한 threshold(0.4)보다 높으면 중복으로 간주
                 if cosine_sim[i, j] > threshold:
                     keep_mask[j] = False
         
@@ -83,9 +88,7 @@ def collect_section_news(driver, category_name, url):
             try:
                 dt_element = article.find_element(By.CSS_SELECTOR, ".sa_text_datetime b")
                 time_text = dt_element.text.strip()
-
                 if "1일전" in time_text:
-                    print(f"   ✋ '1일전' 기사 도달. [{category_name}] 종료.")
                     found_yesterday = True
                     break
 
@@ -99,20 +102,17 @@ def collect_section_news(driver, category_name, url):
             except: continue
 
         if found_yesterday: break
-
         try:
             more_button = driver.find_element(By.CLASS_NAME, "section_more_inner")
-            if more_button.is_displayed():
-                more_button.click()
-                time.sleep(1.5)
-            else: break
+            more_button.click()
+            time.sleep(1.5)
         except: break
             
     return news_data
 
 def save_to_csv(all_data):
     if not all_data:
-        print("\n❌ 저장할 데이터가 없습니다.")
+        print("\n❌ 최종 결과가 없어 파일을 생성하지 않습니다.")
         return
 
     filename = "naver_today_news.csv"
@@ -120,26 +120,31 @@ def save_to_csv(all_data):
         writer = csv.writer(f)
         writer.writerow(['분류', '제목', '시간', '링크'])
         writer.writerows(all_data)
-    print(f"\n💾 저장 완료: {filename} (총 {len(all_data)}건)")
+    print(f"\n💾 저장 완료: {filename} (최종 {len(all_data)}건)")
 
 if __name__ == "__main__":
     driver = setup_driver()
     raw_news = []
 
     try:
-        # 1. 모든 카테고리 순회하며 수집
+        # 1. 뉴스 전체 수집
         for category, url in CATEGORIES.items():
             raw_news.extend(collect_section_news(driver, category, url))
         
-        print(f"\n--- 수집 완료 (총 {len(raw_news)}건) ---")
+        print(f"\n--- 1단계: 수집 완료 ({len(raw_news)}건) ---")
         
-        # 2. 자연어 처리로 유사 제목 제거
-        print("🤖 AI 중복 필터링 작동 중...")
-        filtered_news = deduplicate_articles(raw_news, threshold=0.4)
-        print(f"✨ 필터링 결과: {len(raw_news)}건 -> {len(filtered_news)}건으로 압축")
+        # 2. AI 관련 기사 1차 필터링 (순서 변경됨)
+        print("🔍 2단계: AI 관련 기사 추출 중...")
+        ai_news = filter_ai_keywords(raw_news)
         
-        # 3. 최종 결과 저장
-        save_to_csv(filtered_news)
+        # 3. 필터링된 결과 내에서 중복 제거 (threshold 0.2)
+        print(f"🤖 3단계: 유사도 기반 중복 제거 중 (기준: 0.2, 대상: {len(ai_news)}건)...")
+        final_news = deduplicate_articles(ai_news, threshold=0.2)
+        
+        print(f"\n✨ 최종 요약: 전체({len(raw_news)}건) -> AI추출({len(ai_news)}건) -> 중복제거({len(final_news)}건)")
+        
+        # 4. 저장
+        save_to_csv(final_news)
         
     finally:
         driver.quit()
