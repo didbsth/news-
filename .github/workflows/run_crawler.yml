@@ -1,0 +1,28 @@
+name: Naver News Crawler
+
+on:
+  schedule:
+    - cron: '0 23 * * *' # 매일 한국 시간 오전 8시 실행
+  workflow_dispatch:      # 수동 실행 버튼 생성
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    - name: Run Crawler
+      run: python main.py
+    - name: Commit and Push
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add naver_today_news.csv
+        git commit -m "자동 뉴스 업데이트" || echo "변경사항 없음"
+        git push
