@@ -3,7 +3,7 @@ import time
 import re
 import os
 import pandas as pd
-import google.generativeai as genai
+from google import genai  # 최신 SDK 사용
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -12,7 +12,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# --- 1. 환경 설정 및 Gemini 초기화 ---
+# --- 1. 환경 설정 및 카테고리 ---
 CATEGORIES = {
     "모바일": "https://news.naver.com/breakingnews/section/105/731",
     "인터넷 & SNS": "https://news.naver.com/breakingnews/section/105/226",
@@ -22,14 +22,9 @@ CATEGORIES = {
     "과학 일반": "https://news.naver.com/breakingnews/section/105/228"
 }
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# 2026년 최신 Gemini 3 모델 및 클라이언트 설정
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-
-# 기존 1.5 대신 2026년 최신 모델인 3 시리즈를 사용하도록 수정
-model = genai.GenerativeModel(
-    model_name='gemini-3-flash-preview', # 혹은 'gemini-flash-latest'
-    tools=[{"google_search_retrieval": {}}]
-)
 def setup_driver():
     options = Options()
     options.add_argument("--headless")
@@ -38,15 +33,47 @@ def setup_driver():
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-# --- 2. 뉴스 수집 및 필터링 로직 (기존 유지) ---
+# --- 2. 수집 및 정제 엔진 (첫 번째 코드 로직) ---
+
+def clean_text(text):
+    return re.sub(r'[^가-힣\s]', '', text)
+
+def collect_section_news(driver, category_name, url):
+    print(f"📂 [{category_name}] 섹션 수집 시작...")
+    driver.get(url)
+    news_data, seen_links, found_yesterday = [], set(), False
+
+    while not found_yesterday:
+        articles = driver.find_elements(By.CLASS_NAME, "sa_item")
+        if not articles: break
+
+        for article in articles:
+            try:
+                dt_el = article.find_element(By.CSS_SELECTOR, ".sa_text_datetime b")
+                time_text = dt_el.text.strip()
+                if "1일전" in time_text:
+                    found_yesterday = True
+                    break
+
+                title_el = article.find_element(By.CLASS_NAME, "sa_text_title")
+                title, link = title_el.text.strip(), title_el.get_attribute("href")
+
+                if link not in seen_links:
+                    news_data.append([category_name, title, time_text, link])
+                    seen_links.add(link)
+            except: continue
+
+        if found_yesterday: break
+        try:
+            more_btn = driver.find_element(By.CLASS_NAME, "section_more_inner")
+            more_btn.click()
+            time.sleep(1.5)
+        except: break
+    return news_data
 
 def filter_ai_keywords(data_list):
-    filtered_data = []
     pattern = re.compile(r'ai|인공지능', re.IGNORECASE)
-    for item in data_list:
-        if pattern.search(item[1]):
-            filtered_data.append(item)
-    return filtered_data
+    return [item for item in data_list if pattern.search(item[1])]
 
 def deduplicate_articles(data_list, threshold=0.2):
     if not data_list: return []
@@ -56,7 +83,7 @@ def deduplicate_articles(data_list, threshold=0.2):
         cat_df = df[df['분류'] == category].copy()
         if len(cat_df) <= 1:
             final_indices.extend(cat_df.index.tolist()); continue
-        titles = cat_df['제목'].apply(lambda x: re.sub(r'[^가-힣\s]', '', x)).tolist()
+        titles = cat_df['제목'].apply(clean_text).tolist()
         matrix = TfidfVectorizer().fit_transform(titles)
         sim = cosine_similarity(matrix, matrix)
         keep = [True] * len(cat_df)
@@ -67,40 +94,40 @@ def deduplicate_articles(data_list, threshold=0.2):
         final_indices.extend(cat_df.iloc[keep].index.tolist())
     return df.loc[final_indices].values.tolist()
 
-# --- 3. Gemini 지능형 분석 로직 (신규) ---
+# --- 3. Gemini 3 지능형 분석 엔진 (두 번째 코드 로직) ---
 
 def analyze_category_with_gemini(category_name, articles):
-    """분류별 기사 리스트를 Gemini에게 전달하여 구글 검색 기반 분석 수행"""
     if not articles:
         return f"### {category_name}\n수집된 주요 AI 뉴스가 없습니다.\n"
 
-    # 기사 제목과 링크 리스트화
-    article_list_str = "\n".join([f"- {a[1]} ({a[3]})" for a in articles[:10]]) # 카테고리당 최대 10개 분석
+    # 상위 10개 기사를 요약 대상으로 전달
+    article_list_str = "\n".join([f"- {a[1]} ({a[3]})" for a in articles])
 
     prompt = f"""
-    당신은 IT 전문 분석가입니다. 아래 제공된 '{category_name}' 분야의 뉴스 제목들을 구글 검색으로 확인하고 정독한 뒤, 다음 규칙에 따라 리포트를 작성하세요.
+    당신은 IT 전문 분석가입니다. 아래 제공된 '{category_name}' 분야의 뉴스들을 구글 검색으로 확인하고 정독한 뒤 리포트를 작성하세요.
 
-    [분석 제외 대상]
-    - AI가 기사 내용의 핵심이 아닌 경우
-    - 단순히 주가 움직임, 시가총액 등 지나친 경제/금융 중심 뉴스
-    - 구체적인 정보 없이 일반적인 인사이트만 다루는 기사 (예: 'AI 공습, 상상력이 무기다' 등)
-
+    [분석 제외] AI 비핵심 기사, 단순 주가/시총 뉴스, 정보 없는 일반 인사이트 기사.
     [작성 규칙]
-    1. 가장 많이 언급되는 핵심 이슈 요약: 현재 해당 분야의 가장 큰 흐름을 2문장으로 요약하고 관련 링크를 제공하세요.
-    2. 신제품/신기능 소식: AI 관련 신제품, 신기능, 서비스 출시 및 예정 소식이 있다면 최대 3문장으로 요약하세요.
-    3. 사회/제도/시장의 변화: AI로 인한 기존 시스템이나 시장 구조의 구체적인 '변화' 양상을 요약하세요.
-    4. **[필수] 전문 용어는 괄호를 사용해 친절하게 풀어서 설명하세요.**
+    1. 가장 많이 언급되는 핵심 이슈 요약: 현재 해당 분야의 가장 큰 흐름을 2문장으로 요약하고 관련 링크를 제공
+    2. 신제품/신기능 소식: AI 관련 신제품, 신기능, 서비스 출시 및 예정 소식이 있다면 최대 3문장으로 요약
+    3.사회/제도/시장의 변화: AI로 인한 기존 시스템이나 시장 구조의 구체적인 '변화' 내용을 요약
+    4. **[필수] 전문 용어는 괄호를 사용해 친절하게 풀어서 설명할 것.**
 
-    뉴스 리스트:
+    기사 리스트:
     {article_list_str}
     """
 
     try:
-        print(f"🤖 Gemini가 [{category_name}] 분야를 분석 중입니다...")
-        response = model.generate_content(prompt)
+        print(f"🤖 Gemini 3 분석 중: {category_name}")
+        # 최신 SDK 방식의 Google Search 호출
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview', # 혹은 'gemini-flash-latest'
+            contents=prompt,
+            config={'tools': [{'google_search': {}}]}
+        )
         return f"## 📌 {category_name} 동향 분석\n{response.text}\n\n"
     except Exception as e:
-        return f"## 📌 {category_name} 동향 분석\n분석 중 에러 발생: {e}\n\n"
+        return f"## 📌 {category_name} 분석 에러: {e}\n"
 
 # --- 4. 메인 실행 프로세스 ---
 
@@ -109,30 +136,31 @@ if __name__ == "__main__":
     raw_news = []
 
     try:
-        # 단계 1: 뉴스 수집
+        # 단계 1: 실제 뉴스 수집 실행 (중요)
         for cat, url in CATEGORIES.items():
-            # (기존 collect_section_news 함수 호출부 - 1일전 기사까지 수집)
-            # 여기서는 편의상 수집 로직이 작동하여 raw_news에 담겼다고 가정
-            pass 
+            raw_news.extend(collect_section_news(driver, cat, url))
         
+        print(f"\n--- 1단계: 수집 완료 ({len(raw_news)}건) ---")
+
         # 단계 2: AI 필터링 및 중복 제거
         ai_news = filter_ai_keywords(raw_news)
         final_list = deduplicate_articles(ai_news, threshold=0.2)
-        
+        print(f"✨ 필터링 결과: 수집({len(raw_news)}) -> AI추출({len(ai_news)}) -> 중복제거({len(final_list)})")
+
         # 단계 3: 분류별 그룹화 및 Gemini 분석
         report_content = ["# 🤖 오늘의 AI 기술 및 시장 동향 보고서\n\n"]
         df_final = pd.DataFrame(final_list, columns=['분류', '제목', '시간', '링크'])
         
         for category in CATEGORIES.keys():
             category_articles = df_final[df_final['분류'] == category].values.tolist()
-            analysis = analyze_category_with_gemini(category, category_articles)
-            report_content.append(analysis)
+            report_content.append(analyze_category_with_gemini(category, category_articles))
         
-        # 단계 4: 최종 마크다운 리포트 저장
+        # 단계 4: 결과 저장
         with open("AI_Daily_Report.md", "w", encoding="utf-8") as f:
             f.writelines(report_content)
+        pd.DataFrame(final_list, columns=['분류','제목','시간','링크']).to_csv("naver_today_news.csv", index=False, encoding='utf-8-sig')
         
-        print("\n✨ 분석 리포트 생성이 완료되었습니다: AI_Daily_Report.md")
+        print("\n✅ 모든 작업 완료: AI_Daily_Report.md 및 naver_today_news.csv 생성됨")
 
     finally:
         driver.quit()
