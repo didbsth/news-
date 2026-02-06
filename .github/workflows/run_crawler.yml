@@ -26,7 +26,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # 기존 requirements.txt 설치
           pip install -r requirements.txt
+          # [추가] 에러 방지를 위해 필요한 라이브러리를 명시적으로 추가 설치합니다.
+          pip install markdown google-genai scikit-learn pandas selenium webdriver-manager
 
       - name: Run Crawler
         # [유지] GitHub Secrets의 API 키 환경 변수 연결
@@ -39,8 +42,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # [수정] 웹사이트용 index.html 파일을 추가하여 커밋 범위에 포함합니다.
+          # [추가] index.html을 포함하여 생성된 모든 결과 파일을 추적합니다.
           git add naver_today_news.csv AI_Daily_Report.md index.html
           
-          git commit -m "🤖 자동 AI 뉴스 및 동향 리포트 업데이트" || echo "변경사항 없음"
+          git commit -m "🤖 자동 AI 뉴스 및 동향 리포트 업데이트 ($(date +'%Y-%m-%d %H:%M'))" || echo "변경사항 없음"
           git push
