@@ -2,8 +2,9 @@ import csv
 import time
 import re
 import os
+import datetime
 import pandas as pd
-from google import genai  # 최신 SDK 사용
+from google import genai
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -22,18 +23,18 @@ CATEGORIES = {
     "과학 일반": "https://news.naver.com/breakingnews/section/105/228"
 }
 
-# 2026년 최신 Gemini 3 모델 및 클라이언트 설정
+# Gemini API 설정 (GitHub Secrets 혹은 환경변수에서 로드)
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 def setup_driver():
     options = Options()
-    options.add_argument("--headless")
+    options.add_argument("--headless") # GitHub Actions 실행 시 필수
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-# --- 2. 수집 및 정제 엔진 (첫 번째 코드 로직) ---
+# --- 2. 수집 및 정제 엔진 ---
 
 def clean_text(text):
     return re.sub(r'[^가-힣\s]', '', text)
@@ -94,13 +95,12 @@ def deduplicate_articles(data_list, threshold=0.2):
         final_indices.extend(cat_df.iloc[keep].index.tolist())
     return df.loc[final_indices].values.tolist()
 
-# --- 3. Gemini 3 지능형 분석 엔진 (두 번째 코드 로직) ---
+# --- 3. Gemini 3 지능형 분석 엔진 ---
 
 def analyze_category_with_gemini(category_name, articles):
     if not articles:
-        return f"### {category_name}\n수집된 주요 AI 뉴스가 없습니다.\n"
+        return f"<h3>{category_name}</h3><p>수집된 주요 AI 뉴스가 없습니다.</p>"
 
-    # 상위 10개 기사를 요약 대상으로 전달
     article_list_str = "\n".join([f"- {a[1]} ({a[3]})" for a in articles])
 
     prompt = f"""
@@ -117,50 +117,77 @@ def analyze_category_with_gemini(category_name, articles):
     {article_list_str}
     """
 
+
     try:
         print(f"🤖 Gemini 3 분석 중: {category_name}")
-        # 최신 SDK 방식의 Google Search 호출
         response = client.models.generate_content(
-            model='gemini-3-flash-preview', # 혹은 'gemini-flash-latest'
+            model='gemini-2.0-flash-exp', # 최신 모델명 확인 필요
             contents=prompt,
             config={'tools': [{'google_search': {}}]}
         )
-        return f"## 📌 {category_name} 동향 분석\n{response.text}\n\n"
+        return f"<section><h2>📌 {category_name} 동향 분석</h2>{response.text}</section><hr>"
     except Exception as e:
-        return f"## 📌 {category_name} 분석 에러: {e}\n"
+        return f"<section><h2>📌 {category_name} 분석 에러</h2><p>{e}</p></section><hr>"
 
-# --- 4. 메인 실행 프로세스 ---
+# --- 4. HTML 생성 및 메인 실행 ---
+
+def generate_html_report(report_body):
+    now_kst = (datetime.datetime.utcnow() + datetime.timedelta(hours=9)).strftime('%Y-%m-%d %H:%M')
+    
+    html_template = f"""
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Daily AI Report - {now_kst}</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+        <style>
+            body {{ padding: 20px; max-width: 900px; margin: auto; }}
+            h1 {{ color: #1095c1; text-align: center; margin-bottom: 50px; }}
+            h2 {{ color: #1a1a1a; background: #f4f4f4; padding: 10px; border-radius: 8px; }}
+            .update-time {{ text-align: right; font-size: 0.9rem; color: #666; }}
+            section {{ margin-bottom: 40px; }}
+            hr {{ margin: 40px 0; border: 0; border-top: 1px solid #eee; }}
+        </style>
+    </head>
+    <body>
+        <header>
+            <p class="update-time">마지막 업데이트: {now_kst} (KST)</p>
+            <h1>🤖 오늘의 AI 기술 및 시장 동향 보고서</h1>
+        </header>
+        <main>
+            {report_body}
+        </main>
+        <footer>
+            <p style="text-align: center; color: #999;">© 2026 AI News Automation System</p>
+        </footer>
+    </body>
+    </html>
+    """
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(html_template)
 
 if __name__ == "__main__":
     driver = setup_driver()
     raw_news = []
 
     try:
-        # 단계 1: 실제 뉴스 수집 실행 (중요)
         for cat, url in CATEGORIES.items():
             raw_news.extend(collect_section_news(driver, cat, url))
         
-        print(f"\n--- 1단계: 수집 완료 ({len(raw_news)}건) ---")
-
-        # 단계 2: AI 필터링 및 중복 제거
         ai_news = filter_ai_keywords(raw_news)
         final_list = deduplicate_articles(ai_news, threshold=0.2)
-        print(f"✨ 필터링 결과: 수집({len(raw_news)}) -> AI추출({len(ai_news)}) -> 중복제거({len(final_list)})")
-
-        # 단계 3: 분류별 그룹화 및 Gemini 분석
-        report_content = ["# 🤖 오늘의 AI 기술 및 시장 동향 보고서\n\n"]
+        
+        report_body = ""
         df_final = pd.DataFrame(final_list, columns=['분류', '제목', '시간', '링크'])
         
         for category in CATEGORIES.keys():
             category_articles = df_final[df_final['분류'] == category].values.tolist()
-            report_content.append(analyze_category_with_gemini(category, category_articles))
+            report_body += analyze_category_with_gemini(category, category_articles)
         
-        # 단계 4: 결과 저장
-        with open("AI_Daily_Report.md", "w", encoding="utf-8") as f:
-            f.writelines(report_content)
-        pd.DataFrame(final_list, columns=['분류','제목','시간','링크']).to_csv("naver_today_news.csv", index=False, encoding='utf-8-sig')
-        
-        print("\n✅ 모든 작업 완료: AI_Daily_Report.md 및 naver_today_news.csv 생성됨")
+        generate_html_report(report_body)
+        print("\n✅ index.html 생성 완료")
 
     finally:
         driver.quit()
