@@ -2,6 +2,7 @@ import csv
 import time
 import re
 import os
+import json
 import pandas as pd
 from google import genai  # 최신 SDK 사용
 from selenium import webdriver
@@ -92,63 +93,178 @@ def deduplicate_articles(data_list, threshold=0.2):
        final_indices.extend(cat_df.iloc[keep].index.tolist())
    return df.loc[final_indices].values.tolist()
 
-# --- 3. Gemini 3 지능형 분석 엔진 (프롬프트/설정 절대 보존) ---
+# --- 3. Gemini 3 지능형 분석 및 카드뉴스 가공 엔진 (수정됨) ---
 def analyze_category_with_gemini(category_name, articles):
    if not articles:
-       return f"### {category_name}\n수집된 주요 AI 뉴스가 없습니다.\n"
+       return None
 
-   article_list_str = "\n".join([f"- {a[1]} ({a[3]})" for a in articles])
+   article_list_str = "\n".join([f"- {a[1]}" for a in articles])
+   links_html = "".join([f"<li><a href='{a[3]}' target='_blank'>{a[1]}</a></li>" for a in articles[:10]])
 
+   # [프롬프트] 1차 상세 분석 후 2차 카드뉴스용 요약 생성을 동시에 지시
    prompt = f"""
-    당신은 IT 전문 분석가입니다. 아래 제공된 '{category_name}' 분야의 뉴스들을 구글 검색으로 확인하고 정독한 뒤 리포트를 작성하세요.
+    당신은 IT 전문 데이터 전략가입니다. '{category_name}' 분야의 뉴스들을 정독하고 카드뉴스 제작을 위한 최종 요약본을 만드세요.
 
-    [분석 제외] AI 비핵심 기사, 단순 주가/시총 뉴스, 정보 없는 일반 인사이트 기사.
-    [작성 규칙]
-    1. 가장 많이 언급되는 핵심 이슈 요약: 현재 해당 분야의 가장 큰 흐름을 2문장으로 요약하고 관련 링크를 제공
-    2. 신제품/신기능 소식: AI 관련 신제품, 신기능, 서비스 출시 및 예정 소식이 있다면 최대 3문장으로 요약
-    3.사회/제도/시장의 변화: AI로 인한 기존 시스템이나 시장 구조의 구체적인 '변화' 내용을 요약
-    4. **[필수] 전문 용어는 괄호를 사용해 친절하게 풀어서 설명할 것.**
+    [1단계: 상세 분석]
+    - 핵심 이슈: 모든 기사를 대조하여 전반적인 핵심 주제를 구체적으로 파악.
+    - 신제품/신기능: 각 기사의 AI 관련 출시/예정 소식을 꼼꼼히 추출.
+    - 시장 변화: AI로 인한 시스템/구조적 변화 내용을 상세히 파악.
+    - 전문 용어: IT 업계 종사자만 알 법한 용어 선별.
+
+    [2단계: 카드뉴스용 정제 (최종 출력물)]
+    - 1단계 분석 내용을 바탕으로 핵심만 간추릴 것.
+    - 정보가 많다면 '사회적 영향력'이 가장 큰 정보 위주로 선별.
+    - 절대 할루시네이션(허구)을 넣지 말고 있는 그대로를 전달.
+    - 읽기 쉽게 글머리 기호(•)를 사용하고, 각 항목당 문장은 3개 이내로 압축.
+    - 전문 용어 설명은 서울권 20대 후반 직장인이 모를만한 것만 친절하게 풀어서 설명.
+
+    [출력 형식: 반드시 아래 JSON 구조 유지]
+    {{
+      "card_issue": "카드뉴스 1페이지에 들어갈 핵심 이슈 요약",
+      "card_products": "카드뉴스 2페이지에 들어갈 신제품 소식 요약",
+      "card_changes": "카드뉴스 3페이지에 들어갈 시장 변화 요약",
+      "card_terms": "카드뉴스 4페이지에 들어갈 용어 사전",
+      "raw_analysis": "내부 참고용 상세 분석 데이터 (간략히)"
+    }}
 
     기사 리스트:
     {article_list_str}
    """
 
    try:
-       print(f"🤖 Gemini 3 분석 중: {category_name}")
+       print(f"🤖 Gemini가 카드뉴스용 핵심 정보를 추출 중입니다: {category_name}")
        response = client.models.generate_content(
-           model='gemini-3-flash-preview', 
-           contents=prompt,
-           config={'tools': [{'google_search': {}}]}
+           model='gemini-2.0-flash', 
+           contents=prompt
        )
-       # 결과 반환 시 Markdown 문법 유지
-       return f"## 📌 {category_name} 동향 분석\n{response.text}\n\n"
+       
+       # JSON 데이터 안전 추출
+       json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+       if not json_match:
+           print(f"⚠️ {category_name}: JSON 형식을 찾을 수 없습니다.")
+           return None
+           
+       analysis_data = json.loads(json_match.group())
+       
+       # HTML 생성을 위한 데이터 구조화
+       return {
+           "category": category_name,
+           "issue": analysis_data['card_issue'],
+           "products": analysis_data['card_products'],
+           "changes": analysis_data['card_changes'],
+           "terms": analysis_data['card_terms'],
+           "links": links_html
+       }
    except Exception as e:
-       return f"## 📌 {category_name} 분석 에러: {e}\n"
+       print(f"❌ {category_name} 분석 에러: {e}")
+       return None
 
-# --- 4. 웹 변환 헬퍼 (새로 추가) ---
-def save_as_html(content_list):
-    """보고서 내용을 HTML 웹사이트 형식으로 저장"""
-    import markdown
-    full_markdown = "".join(content_list)
-    html_content = markdown.markdown(full_markdown, extensions=['fenced_code', 'tables'])
+# --- 4. 웹 변환 및 카드뉴스 레이아웃 (기존 로직 유지하며 요약 데이터 반영) ---
+def save_as_card_news(analysis_results):
+    """간추려진 분석 결과를 5그리드 카드뉴스 형식으로 저장"""
     
+    cards_html = ""
+    for data in analysis_results:
+        if not data: continue
+        
+        # 나노바나나 컨셉의 이미지 (내용과 어울리는 이미지 생성을 위한 시드값 부여)
+        img_url = f"https://picsum.photos/seed/{data['category'].replace(' ', '')}/400/250"
+        
+        cards_html += f"""
+        <div class="category-row">
+            <h2 class="category-title">📂 {data['category']}</h2>
+            <div class="grid-container">
+                <div class="card">
+                    <div class="card-tag">Core Issue</div>
+                    <img src="{img_url}?v=1" alt="issue">
+                    <h3>핵심 이슈</h3>
+                    <div class="card-content">{data['issue'].replace('\n', '<br>')}</div>
+                </div>
+                <div class="card">
+                    <div class="card-tag">New Release</div>
+                    <img src="{img_url}?v=2" alt="product">
+                    <h3>신제품/기능</h3>
+                    <div class="card-content">{data['products'].replace('\n', '<br>')}</div>
+                </div>
+                <div class="card">
+                    <div class="card-tag">Market Change</div>
+                    <img src="{img_url}?v=3" alt="change">
+                    <h3>시장 변화</h3>
+                    <div class="card-content">{data['changes'].replace('\n', '<br>')}</div>
+                </div>
+                <div class="card">
+                    <div class="card-tag">Tech Terms</div>
+                    <img src="{img_url}?v=4" alt="terms">
+                    <h3>용어 설명</h3>
+                    <div class="card-content">{data['terms'].replace('\n', '<br>')}</div>
+                </div>
+                <div class="card links-card">
+                    <div class="card-tag">References</div>
+                    <div class="links-header">🔗 주요 기사 원문</div>
+                    <ul class="links-list">
+                        {data['links']}
+                    </ul>
+                </div>
+            </div>
+        </div>
+        """
+
     html_template = f"""
     <!DOCTYPE html>
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Daily AI Report</title>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
+        <title>Daily AI Card News</title>
         <style>
-            body {{ box-sizing: border-box; min-width: 200px; max-width: 980px; margin: 0 auto; padding: 45px; }}
-            @media (max-width: 767px) {{ .markdown-body {{ padding: 15px; }} }}
+            :root {{
+                --bg-color: #f8f9fa;
+                --card-bg: #ffffff;
+                --primary-color: #2d3436;
+                --accent-color: #0984e3;
+            }}
+            body {{ font-family: 'Pretendard', sans-serif; background: var(--bg-color); margin: 0; padding: 20px; }}
+            .category-row {{ margin-bottom: 50px; overflow-x: auto; }}
+            .category-title {{ border-left: 5px solid var(--accent-color); padding-left: 15px; margin-bottom: 20px; color: var(--primary-color); }}
+            
+            .grid-container {{ 
+                display: flex; 
+                gap: 20px; 
+                padding-bottom: 15px;
+                min-width: min-content;
+            }}
+            
+            .card {{ 
+                background: var(--card-bg); 
+                border-radius: 12px; 
+                width: 300px; 
+                flex-shrink: 0;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+                padding: 15px;
+                display: flex;
+                flex-direction: column;
+            }}
+            .card-tag {{ font-size: 11px; font-weight: bold; color: var(--accent-color); text-transform: uppercase; margin-bottom: 8px; }}
+            .card img {{ width: 100%; height: 160px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; }}
+            .card h3 {{ font-size: 18px; margin: 0 0 10px 0; color: #2d3436; }}
+            .card-content {{ font-size: 14px; line-height: 1.6; color: #636e72; flex-grow: 1; }}
+            
+            .links-card {{ background: #2d3436; color: white; }}
+            .links-card .card-tag {{ color: #74b9ff; }}
+            .links-header {{ font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 10px; }}
+            .links-list {{ padding-left: 20px; font-size: 13px; color: #dfe6e9; line-height: 1.8; }}
+            .links-list a {{ color: #74b9ff; text-decoration: none; }}
+            .links-list a:hover {{ text-decoration: underline; }}
+            
+            ::-webkit-scrollbar {{ height: 8px; }}
+            ::-webkit-scrollbar-track {{ background: #f1f1f1; }}
+            ::-webkit-scrollbar-thumb {{ background: #ccc; border-radius: 10px; }}
         </style>
     </head>
-    <body class="markdown-body">
-        {html_content}
-        <hr>
-        <p style="text-align:center; color:gray;">Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+    <body>
+        <h1 style="text-align:center; margin-bottom:40px;">🤖 Daily AI 카드뉴스 리포트</h1>
+        {cards_html}
+        <p style="text-align:center; color:gray; margin-top:50px;">Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
     </body>
     </html>
     """
@@ -170,19 +286,17 @@ if __name__ == "__main__":
        final_list = deduplicate_articles(ai_news, threshold=0.2)
        print(f"✨ 필터링 결과: 수집({len(raw_news)}) -> AI추출({len(ai_news)}) -> 중복제거({len(final_list)})")
 
-       report_content = ["# 🤖 오늘의 AI 기술 및 시장 동향 보고서\n\n"]
+       analysis_results = []
        df_final = pd.DataFrame(final_list, columns=['분류', '제목', '시간', '링크'])
        
        for category in CATEGORIES.keys():
            category_articles = df_final[df_final['분류'] == category].values.tolist()
-           report_content.append(analyze_category_with_gemini(category, category_articles))
+           if category_articles:
+               res = analyze_category_with_gemini(category, category_articles)
+               if res: analysis_results.append(res)
        
-       # 기존 파일 저장 유지
-       with open("AI_Daily_Report.md", "w", encoding="utf-8") as f:
-           f.writelines(report_content)
-       
-       # 웹사이트 파일(index.html) 생성 로직 추가
-       save_as_html(report_content)
+       # 카드뉴스 웹사이트(index.html) 생성
+       save_as_card_news(analysis_results)
        
        pd.DataFrame(final_list, columns=['분류','제목','시간','링크']).to_csv("naver_today_news.csv", index=False, encoding='utf-8-sig')
        
