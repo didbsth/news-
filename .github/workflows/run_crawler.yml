@@ -1,49 +1,85 @@
-name: Naver News Crawler
+## YML 검토 결과
 
+전체적으로 잘 구성되어 있고, 큰 문제는 없습니다. 다만 몇 가지 수정하면 좋을 점이 있습니다.
+
+---
+
+**1. Chrome/ChromeDriver 미설치 (치명적)**
+
+GitHub Actions의 `ubuntu-latest`에는 Chrome이 기본 설치되어 있긴 하지만, 버전 불일치로 `webdriver-manager`가 실패하는 경우가 잦습니다. 명시적으로 설치하는 스텝을 추가하는 게 안전합니다.
+
+```yaml
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+```
+
+이 스텝을 `Install dependencies` 앞에 넣으세요.
+
+**2. `git add`에 없는 파일 참조**
+
+`AI_Daily_Report.md`를 add하고 있는데, 현재 `main.py`는 이 파일을 생성하지 않습니다. 이전 버전의 잔재로 보이는데, 해당 파일이 없으면 git add 자체는 에러를 내지 않지만(경고만 출력), 깔끔하게 제거하거나 와일드카드로 바꾸는 게 좋습니다.
+
+```yaml
+git add naver_today_news.csv index.html
+```
+
+**3. cron 시간 확인**
+
+`cron: '50 23 * * *'`는 UTC 23:50 = KST 08:50으로, 의도대로 맞습니다. 다만 GitHub Actions의 cron은 **최대 15~30분 지연**될 수 있다는 점은 인지해두시면 됩니다. 정확한 시간이 중요하다면 여유를 두고 `'30 23 * * *'`(KST 08:30) 정도로 당기는 것도 방법입니다.
+
+**4. actions 버전 업그레이드 (사소)**
+
+`actions/checkout@v3`, `actions/setup-python@v4`는 동작하지만, 현재 최신은 `@v4`/`@v5`입니다. 보안 패치 등을 위해 올려도 좋습니다.
+
+```yaml
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+```
+
+---
+
+**수정된 YML 요약:**
+
+```yaml
+name: Naver News Crawler
 on:
   schedule:
-    # 한국 시간(KST) 오전 8시 50분 실행 (UTC 23:50)
     - cron: '50 23 * * *'
-  workflow_dispatch:      # 수동 실행 버튼 생성
-
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
-    # [유지] 깃허브 서버에 파일 쓰기 권한 부여
     permissions:
       contents: write
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-
+        uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # 기존 requirements.txt 설치
           pip install -r requirements.txt
-          # [추가] 에러 방지를 위해 필요한 라이브러리를 명시적으로 추가 설치합니다.
-          pip install markdown google-genai scikit-learn pandas selenium webdriver-manager
-
+          pip install google-genai scikit-learn pandas selenium webdriver-manager
       - name: Run Crawler
-        # [유지] GitHub Secrets의 API 키 환경 변수 연결
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
-
       - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # [추가] index.html을 포함하여 생성된 모든 결과 파일을 추적합니다.
-          git add naver_today_news.csv AI_Daily_Report.md index.html
-          
-          git commit -m "🤖 자동 AI 뉴스 및 동향 리포트 업데이트 ($(date +'%Y-%m-%d %H:%M'))" || echo "변경사항 없음"
+          git add naver_today_news.csv index.html
+          git commit -m "🤖 자동 AI 뉴스 리포트 업데이트 ($(date +'%Y-%m-%d %H:%M'))" || echo "변경사항 없음"
           git push
+```
+
+이 정도면 안정적으로 돌아갈 겁니다.
