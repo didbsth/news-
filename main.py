@@ -194,13 +194,19 @@ def analyze_category_with_gemini(category_name, articles):
         print(f"❌ {category_name} 최종 분석 에러: {e}")
         return None
 
-# --- 4. 웹 변환 및 카드뉴스 레이아웃 (기존 유지) ---
+# --- 4. 웹 변환 및 카드뉴스 레이아웃 ---
 def save_as_card_news(analysis_results):
     """간추려진 분석 결과를 5그리드 카드뉴스 형식으로 저장"""
     
     cards_html = ""
     for data in analysis_results:
         if not data: continue
+        
+        # [수정] f-string 내부 백슬래시 에러 방지를 위해 외부에서 미리 치환
+        formatted_issue = data['issue'].replace('\n', '<br>')
+        formatted_products = data['products'].replace('\n', '<br>')
+        formatted_changes = data['changes'].replace('\n', '<br>')
+        formatted_terms = data['terms'].replace('\n', '<br>')
         
         img_keyword = data['img_seed']
         img_url = f"https://loremflickr.com/400/250/{img_keyword}"
@@ -213,25 +219,25 @@ def save_as_card_news(analysis_results):
                     <div class="card-tag">Core Issue</div>
                     <img src="{img_url}?sig={time.time()}" alt="issue">
                     <h3>핵심 이슈</h3>
-                    <div class="card-content">{data['issue'].replace('\n', '<br>')}</div>
+                    <div class="card-content">{formatted_issue}</div>
                 </div>
                 <div class="card">
                     <div class="card-tag">New Release</div>
                     <img src="https://loremflickr.com/400/250/technology,new?sig={time.time()+1}" alt="product">
                     <h3>신제품/기능</h3>
-                    <div class="card-content">{data['products'].replace('\n', '<br>')}</div>
+                    <div class="card-content">{formatted_products}</div>
                 </div>
                 <div class="card">
                     <div class="card-tag">Market Change</div>
                     <img src="https://loremflickr.com/400/250/business,chart?sig={time.time()+2}" alt="change">
                     <h3>시장 변화</h3>
-                    <div class="card-content">{data['changes'].replace('\n', '<br>')}</div>
+                    <div class="card-content">{formatted_changes}</div>
                 </div>
                 <div class="card">
                     <div class="card-tag">Tech Terms</div>
                     <img src="https://loremflickr.com/400/250/dictionary,book?sig={time.time()+3}" alt="terms">
                     <h3>용어 설명</h3>
-                    <div class="card-content">{data['terms'].replace('\n', '<br>')}</div>
+                    <div class="card-content">{formatted_terms}</div>
                 </div>
                 <div class="card links-card">
                     <div class="card-tag">References</div>
@@ -244,12 +250,13 @@ def save_as_card_news(analysis_results):
         </div>
         """
 
+    # HTML 템플릿 부분은 동일 (변수 처리 방식만 유지)
+    current_time = time.strftime('%Y-%m-%d %H:%M:%S')
     html_template = f"""
     <!DOCTYPE html>
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Daily AI Card News</title>
         <style>
             :root {{
@@ -261,51 +268,29 @@ def save_as_card_news(analysis_results):
             body {{ font-family: 'Pretendard', sans-serif; background: var(--bg-color); margin: 0; padding: 20px; }}
             .category-row {{ margin-bottom: 50px; overflow-x: auto; }}
             .category-title {{ border-left: 5px solid var(--accent-color); padding-left: 15px; margin-bottom: 20px; color: var(--primary-color); }}
-            
-            .grid-container {{ 
-                display: flex; 
-                gap: 20px; 
-                padding-bottom: 15px;
-                min-width: min-content;
-            }}
-            
-            .card {{ 
-                background: var(--card-bg); 
-                border-radius: 12px; 
-                width: 300px; 
-                flex-shrink: 0;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-                padding: 15px;
-                display: flex;
-                flex-direction: column;
-            }}
+            .grid-container {{ display: flex; gap: 20px; padding-bottom: 15px; min-width: min-content; }}
+            .card {{ background: var(--card-bg); border-radius: 12px; width: 300px; flex-shrink: 0; box-shadow: 0 4px 15px rgba(0,0,0,0.08); padding: 15px; display: flex; flex-direction: column; }}
             .card-tag {{ font-size: 11px; font-weight: bold; color: var(--accent-color); text-transform: uppercase; margin-bottom: 8px; }}
             .card img {{ width: 100%; height: 160px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; }}
             .card h3 {{ font-size: 18px; margin: 0 0 10px 0; color: #2d3436; }}
             .card-content {{ font-size: 14px; line-height: 1.6; color: #636e72; flex-grow: 1; }}
-            
             .links-card {{ background: #2d3436; color: white; }}
-            .links-card .card-tag {{ color: #74b9ff; }}
             .links-header {{ font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 10px; }}
             .links-list {{ padding-left: 20px; font-size: 13px; color: #dfe6e9; line-height: 1.8; }}
             .links-list a {{ color: #74b9ff; text-decoration: none; }}
-            .links-list a:hover {{ text-decoration: underline; }}
-            
-            ::-webkit-scrollbar {{ height: 8px; }}
-            ::-webkit-scrollbar-track {{ background: #f1f1f1; }}
-            ::-webkit-scrollbar-thumb {{ background: #ccc; border-radius: 10px; }}
         </style>
     </head>
     <body>
         <h1 style="text-align:center; margin-bottom:40px;">🤖 Daily AI 카드뉴스 리포트 (w/ Deep Research)</h1>
         {cards_html}
-        <p style="text-align:center; color:gray; margin-top:50px;">Last Updated: {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p style="text-align:center; color:gray; margin-top:50px;">Last Updated: {current_time}</p>
     </body>
     </html>
     """
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html_template)
 
+        
 # --- 5. 메인 실행 프로세스 (기존 유지) ---
 if __name__ == "__main__":
     driver = setup_driver()
