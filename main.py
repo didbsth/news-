@@ -109,14 +109,15 @@ def analyze_category_with_gemini(category_name, articles):
         
         # 각 기사별 검색 수행을 위한 미니 프롬프트
         mini_prompt = f"""
-        다음 뉴스 기사 제목에 대해 Google 검색을 수행하여 핵심 팩트(출시일, 주요 기능, 가격, 기업명 등)를 3줄 내외로 요약해줘.
+        다음 뉴스 기사 제목에 대해 Google 검색을 수행하여 기사 내용에 대한 핵심 내용
+        (기사가 말하고자 하는 가장 핵심적이고 중요한 사건, 해당 사건에 대한 해석을 뒷받침하기 위해 기사에서 담은 근거, 해당 사건과 관련된 변화 등)를 3줄 내외로 요약해줘.
         기사 제목: {title}
         """
         
         try:
             # 개별 기사 검색 (Google Search 도구 사용)
             mini_response = client.models.generate_content(
-                model='gemini-2.0-flash', 
+                model='gemini-3-flash-preview', 
                 contents=mini_prompt,
                 config={'tools': [{'google_search': {}}]}
             )
@@ -165,12 +166,13 @@ def analyze_category_with_gemini(category_name, articles):
         # 혹시 모를 검증을 위해 켜두거나 끄셔도 됩니다. 여기서는 Context 집중을 위해 끄거나, 
         # SDK 특성상 그대로 두되 Context 우선을 지시했으므로 안전합니다.
         response = client.models.generate_content(
-            model='gemini-2.0-flash', 
+            model='gemini-3-flash-preview', 
             contents=prompt,
             config={
                 'response_mime_type': 'application/json'
             }
         )
+
         
         json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if not json_match:
