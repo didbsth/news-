@@ -110,7 +110,8 @@ def analyze_category_with_gemini(category_name, articles):
         # 각 기사별 검색 수행을 위한 미니 프롬프트
         mini_prompt = f"""
         다음 뉴스 기사 제목에 대해 Google 검색을 수행하여 기사 내용에 대한 핵심 내용
-        (기사가 말하고자 하는 가장 핵심적이고 중요한 사건, 해당 사건에 대한 해석을 뒷받침하기 위해 기사에서 담은 근거, 해당 사건과 관련된 변화 등)를 3줄 내외로 요약해줘.
+        (기사가 말하고자 하는 가장 핵심적이고 중요한 사건, 해당 사건에 대한 해석을 뒷받침하기 위해 기사에서 담은 근거, 해당 사건과 관련된 변화 등)를
+        누가(Who), 언제(When), 어디서(Where), 무엇을(What), 어떻게(How), 왜(Why) 중 명시되지 않은 정보를 제외하더라도 최대한 준수해서 핵심 내용을 위주로 3줄 내외로 요약해줘.
         기사 제목: {title}
         """
         
@@ -146,14 +147,14 @@ def analyze_category_with_gemini(category_name, articles):
     [작성 지침]
     1. 반드시 위 [수집된 리서치 데이터]에 포함된 내용만을 사실(Fact)로 간주하여 분석하세요.
     2. 여러 기사에 공통적으로 등장하는 내용은 '핵심 이슈'로 분류하세요.
-    3. 구체적인 수치(가격, 날짜 등)나 고유명사(제품명)가 있다면 이를 우선적으로 포함하세요.
+    3. 카드뉴스에 포함하는 정보는 누가(Who), 언제(When), 무엇을(What), 어떻게(How) 위주로 핵심 정보를 서술할 것.
 
     [출력 형식: 반드시 아래 JSON 구조 유지]
     {{
-      "card_issue": "카드뉴스 1페이지에 들어갈 핵심 이슈 요약",
-      "card_products": "카드뉴스 2페이지에 들어갈 신제품 소식 요약",
-      "card_changes": "카드뉴스 3페이지에 들어갈 시장 변화 요약",
-      "card_terms": "카드뉴스 4페이지에 들어갈 용어 사전",
+      "card_issue": "가장 많이 언급되는 핵심 이슈 요약: 현재 해당 분야의 가장 큰 흐름을 2문장으로 요약",
+      "card_products": "신제품/신기능 소식: AI 관련 신제품, 신기능, 서비스 출시 및 예정 소식이 있다면 관련 기업명을 포함하여 최대 3문장으로 요약",
+      "card_changes": "사회/제도/시장의 변화: AI로 인한 기존 시스템이나 시장 구조의 구체적인 '변화' 내용을 요약",
+      "card_terms": "앞서 카드뉴스에 포함한 it관련 전문 용어들을 정리하여 괄호를 사용해 친절하게 풀어서 설명",
       "image_keyword": "이 뉴스들의 핵심 내용을 가장 잘 표현하는 영어 단어 하나 (예: robot, smartphone, server 등)",
       "raw_analysis": "참고용 분석 데이터"
     }}
@@ -208,34 +209,27 @@ def save_as_card_news(analysis_results):
         formatted_changes = data['changes'].replace('\n', '<br>')
         formatted_terms = data['terms'].replace('\n', '<br>')
         
-        img_keyword = data['img_seed']
-        img_url = f"https://loremflickr.com/400/250/{img_keyword}"
-        
         cards_html += f"""
         <div class="category-row">
             <h2 class="category-title">📂 {data['category']} (Hot Topic)</h2>
             <div class="grid-container">
                 <div class="card">
                     <div class="card-tag">Core Issue</div>
-                    <img src="{img_url}?sig={time.time()}" alt="issue">
                     <h3>핵심 이슈</h3>
                     <div class="card-content">{formatted_issue}</div>
                 </div>
                 <div class="card">
                     <div class="card-tag">New Release</div>
-                    <img src="https://loremflickr.com/400/250/technology,new?sig={time.time()+1}" alt="product">
                     <h3>신제품/기능</h3>
                     <div class="card-content">{formatted_products}</div>
                 </div>
                 <div class="card">
                     <div class="card-tag">Market Change</div>
-                    <img src="https://loremflickr.com/400/250/business,chart?sig={time.time()+2}" alt="change">
                     <h3>시장 변화</h3>
                     <div class="card-content">{formatted_changes}</div>
                 </div>
                 <div class="card">
                     <div class="card-tag">Tech Terms</div>
-                    <img src="https://loremflickr.com/400/250/dictionary,book?sig={time.time()+3}" alt="terms">
                     <h3>용어 설명</h3>
                     <div class="card-content">{formatted_terms}</div>
                 </div>
@@ -271,7 +265,6 @@ def save_as_card_news(analysis_results):
             .grid-container {{ display: flex; gap: 20px; padding-bottom: 15px; min-width: min-content; }}
             .card {{ background: var(--card-bg); border-radius: 12px; width: 300px; flex-shrink: 0; box-shadow: 0 4px 15px rgba(0,0,0,0.08); padding: 15px; display: flex; flex-direction: column; }}
             .card-tag {{ font-size: 11px; font-weight: bold; color: var(--accent-color); text-transform: uppercase; margin-bottom: 8px; }}
-            .card img {{ width: 100%; height: 160px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; }}
             .card h3 {{ font-size: 18px; margin: 0 0 10px 0; color: #2d3436; }}
             .card-content {{ font-size: 14px; line-height: 1.6; color: #636e72; flex-grow: 1; }}
             .links-card {{ background: #2d3436; color: white; }}
